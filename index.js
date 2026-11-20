@@ -16,7 +16,6 @@ const bookingRoutes = require('./src/routes/booking.routes');
 const paymentRoutes = require('./src/routes/payment.routes');
 const roomRoutes = require('./src/routes/room.routes');
 const serviceRequestsRoutes = require('./src/routes/serviceRequests.routes');
-const bookingAttemptsRoutes = require('./src/routes/bookingAttempts.routes');
 
 const { startBookingExpiryJob } = require('./src/jobs/expireBookingHolds');
 const {
@@ -48,7 +47,6 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/rooms', roomRoutes);
 app.use('/api/v1/bookings', bookingRoutes);
-app.use('/api/v1/booking-attempts', bookingAttemptsRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/service-requests', serviceRequestsRoutes);
 
