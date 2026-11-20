@@ -1,0 +1,445 @@
+openapi: 3.0.3
+info:
+  title: DGEP Backend API
+  version: 1.2.0
+  description: |
+    Digital Guest Experience Platform (DGEP) MVP API.
+
+    ## Authentication
+    Authenticated endpoints use `Authorization: Bearer <JWT>`. Public room
+    browsing and availability endpoints do not require a JWT. Role names used
+    by this API are `guest`, `administrator`, `receptionist`, and
+    `service_staff`.
+
+    ## Developer 3 — Digital Concierge and housekeeping implementation
+    The concierge module supports guest requests in the `housekeeping`,
+    `food_beverage`, and `maintenance` categories. A request receives a unique
+    `SR-...` reference and starts in `pending`. A booking association is
+    optional; when supplied, the booking must belong to the authenticated guest
+    and have status `confirmed`, `checked_in`, or `completed`.
+
+    Guests can list and track only their own requests. Administrators,
+    receptionists, and service staff can use the staff queue. Service staff see
+    and access only requests assigned to their own account. Administrators and
+    receptionists can assign requests to active `service_staff` accounts.
+    Administrators, receptionists, and the assigned service staff member can
+    update a request's status. Only administrators and receptionists can cancel.
+    Each creation, assignment, and status change is written to
+    `service_request_histories` with the actor, previous/new status, note, and
+    timestamp in the same database transaction as the corresponding change.
+
+    ### Concierge values and workflow
+    - Categories: `housekeeping`, `food_beverage`, `maintenance`.
+    - Priorities: `low`, `normal`, `high`, `urgent`; default is `normal`.
+    - Statuses: `pending`, `acknowledged`, `assigned`, `in_progress`,
+      `completed`, `cancelled`.
+    - Acknowledgement is allowed from `pending`; assignment changes `pending`
+      or `acknowledged` to `assigned`; work can move to `in_progress` from
+      `assigned` or `acknowledged`; completion is allowed from `in_progress`.
+      Completed and cancelled requests are terminal and cannot be reassigned
+      or updated.
+    - `details` must contain 3–3000 characters. `quantity`, when supplied,
+      must be a positive integer. Notes are limited to 1000 characters.
+    - Staff accounts must be provisioned with role `service_staff`; this API
+      does not provide public staff self-registration.
+
+    ### Database and migrations
+    `service_requests` stores request ownership, optional booking association,
+    category, details, priority, assignment, status, and timestamps.
+    `service_request_histories` stores status events, actor, note, and timestamp.
+    Migration `20261121092000_align_concierge_and_room_statuses.js` aligns
+    existing databases with the concierge and room status model.
+
+    ### Housekeeping and room turnover
+    Reception staff can check in a confirmed booking and check out a booking
+    that is currently `checked_in`. Checkout marks the booking `completed` and
+    moves its allocated room to `cleaning`. Housekeeping must then update the
+    room status to `ready` after preparation. Rooms in `cleaning`,
+    `maintenance`, or `out_of_service` are not available for allocation.
+    Supported room operational statuses are `ready`, `cleaning`, `maintenance`,
+    and `out_of_service`.
+
+    The supplied check-in/check-out wording was “Checkings morning 7 to 9 /
+    Afternoon 1 to 12”. It is ambiguous, so the API does not enforce a new
+    clock-time window based on that wording. The hotel/Product Management team
+    must confirm exact local check-in and check-out windows before time-based
+    enforcement is added. The two-hour room preparation period remains an
+    operational assumption, not an enforced promise.
+
+    ### Product and policy configuration
+    `room_types.price_per_night` stores configurable nightly room rates.
+    `additional_charges` stores percentage/fixed charges and activation state.
+    VAT is seeded at 7.5% but inactive until tax application is approved.
+    `platform_settings` stores configurable check-in/out defaults, room
+    preparation minutes, booking-hold duration, advance-booking lead times, and
+    cancellation/refund policy switches. No tax or additional charge is applied
+    automatically while activation/application remains unapproved.
+
+    The product notes specify cancellation consideration with 48-hour notice
+    and no refund after check-in. Refund/deduction calculation is not
+    implemented because the final calculation and policy approval are pending.
+    This cancellation/refund policy does not apply to concierge requests.
+
+    ### Unresolved operational dependencies
+    Service-level response targets, category-to-team automatic routing,
+    notification channels, and completion-time promises were not supplied and
+    are not represented as guaranteed API behaviour.
+
+    ### Local setup and verification
+    1. Copy `.env.example` to `.env`; configure `DATABASE_URL`, a strong
+       `JWT_SECRET`, and Paystack test credentials when testing payments.
+    2. Run `npm install`.
+    3. Run `npm run db:migrate`.
+    4. Run `npm run db:seed` to load idempotent synthetic room inventory.
+    5. Run `npm start`.
+    6. Test concierge creation with a guest JWT, assignment with an
+       administrator/receptionist JWT, and status progression with the assigned
+       staff JWT. Confirm guest request tracking and history.
+
+    Automated source checks include JavaScript syntax checks and the project's
+    Node test suite. A live PostgreSQL/Paystack end-to-end run requires valid
+    environment credentials and is not claimed by this source-only delivery.
+servers:
+  - url: /api/v1
+    description: API v1
+tags:
+  - name: Digital Concierge
+  - name: Bookings and Front Desk
+  - name: Rooms and Housekeeping
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, example: Validation failed }
+    ServiceRequestCreate:
+      type: object
+      required: [category, details]
+      properties:
+        booking_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Optional booking association. If supplied, it must belong to the signed-in guest and be confirmed, checked_in, or completed.
+        category:
+          type: string
+          enum: [housekeeping, food_beverage, maintenance]
+        details:
+          type: string
+          minLength: 3
+          maxLength: 3000
+          example: Please provide two additional towels.
+        quantity:
+          type: integer
+          minimum: 1
+          nullable: true
+          example: 2
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+          default: normal
+    ServiceRequestStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [acknowledged, in_progress, completed, cancelled]
+        note:
+          type: string
+          maxLength: 1000
+          example: Staff member is attending to the request
+    ServiceRequestAssignment:
+      type: object
+      required: [staff_id]
+      properties:
+        staff_id:
+          type: string
+          format: uuid
+          description: ID of an active user with role service_staff.
+        note:
+          type: string
+          maxLength: 1000
+          example: Assigned to housekeeping shift
+    ServiceRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string, example: SR-20261120-ABC123 }
+        user_id: { type: string, format: uuid }
+        booking_id: { type: string, format: uuid, nullable: true }
+        category: { type: string, enum: [housekeeping, food_beverage, maintenance] }
+        details: { type: string }
+        quantity: { type: integer, nullable: true }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+        status: { type: string, enum: [pending, acknowledged, assigned, in_progress, completed, cancelled] }
+        assigned_to: { type: string, format: uuid, nullable: true }
+        notes: { type: string, nullable: true }
+        acknowledged_at: { type: string, format: date-time, nullable: true }
+        completed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ServiceRequestHistory:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        service_request_id: { type: string, format: uuid }
+        changed_by: { type: string, format: uuid }
+        previous_status: { type: string, nullable: true }
+        new_status: { type: string }
+        note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        changed_by_name: { type: string, nullable: true }
+    RoomStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, cleaning, maintenance, out_of_service]
+  parameters:
+    ResourceId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+      description: Resource UUID.
+paths:
+  /service-requests:
+    post:
+      tags: [Digital Concierge]
+      summary: Create a guest service request
+      description: Creates a request for housekeeping, food and beverage, or maintenance. A unique reference and initial pending history event are created transactionally.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceRequestCreate' }
+            example:
+              category: housekeeping
+              details: Please provide two additional towels.
+              quantity: 2
+              priority: normal
+      responses:
+        '201':
+          description: Request created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  message: { type: string, example: Service request created }
+                  data: { $ref: '#/components/schemas/ServiceRequest' }
+        '400':
+          description: Invalid input, or supplied booking is not owned by this guest or is not eligible.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { description: Missing or invalid JWT. }
+    get:
+      tags: [Digital Concierge]
+      summary: Retrieve the staff service-request queue
+      description: Administrator and receptionist users can filter the queue. Service staff are automatically restricted to requests assigned to their account; an assigned_to filter does not broaden their access.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, acknowledged, assigned, in_progress, completed, cancelled] }
+        - in: query
+          name: category
+          schema: { type: string, enum: [housekeeping, food_beverage, maintenance] }
+        - in: query
+          name: assigned_to
+          schema: { type: string, format: uuid }
+          description: Administrator/receptionist filter. Service staff remain restricted to their own assignments.
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200':
+          description: Filtered service-request queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  count: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ServiceRequest' }
+        '401': { description: Missing or invalid JWT. }
+        '403': { description: Administrator, receptionist, or service_staff role required. }
+  /service-requests/mine:
+    get:
+      tags: [Digital Concierge]
+      summary: List the signed-in guest's service requests
+      description: Returns only requests created by the authenticated user, newest first.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Guest's own requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  count: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ServiceRequest' }
+        '401': { description: Missing or invalid JWT. }
+  /service-requests/{id}:
+    get:
+      tags: [Digital Concierge]
+      summary: Retrieve a service request and its status history
+      description: The guest owner or authorised staff can retrieve the request. Service staff can retrieve only requests assigned to them. Inaccessible requests return 404.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      responses:
+        '200':
+          description: Request detail with embedded ordered history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/ServiceRequest'
+                      - type: object
+                        properties:
+                          history:
+                            type: array
+                            items: { $ref: '#/components/schemas/ServiceRequestHistory' }
+        '404': { description: Request not found or not accessible. }
+        '401': { description: Missing or invalid JWT. }
+  /service-requests/{id}/history:
+    get:
+      tags: [Digital Concierge]
+      summary: Retrieve a service request's status history
+      description: Guest owner or authorised staff only; service staff must be assigned to the request.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      responses:
+        '200':
+          description: Status history in chronological order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  count: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ServiceRequestHistory' }
+        '404': { description: Request not found or not accessible. }
+        '401': { description: Missing or invalid JWT. }
+  /service-requests/{id}/assign:
+    patch:
+      tags: [Digital Concierge]
+      summary: Assign a request to an active service staff member
+      description: Administrator/receptionist only. Completed or cancelled requests cannot be reassigned. Assigning a pending or acknowledged request changes its status to assigned and records a history event.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceRequestAssignment' }
+            example:
+              staff_id: 00000000-0000-4000-8000-000000000001
+              note: Assigned to housekeeping shift
+      responses:
+        '200': { description: Request assigned and history recorded. }
+        '400': { description: staff_id does not identify an active service staff member. }
+        '404': { description: Request not found. }
+        '409': { description: Completed or cancelled request cannot be reassigned. }
+        '401': { description: Missing or invalid JWT. }
+        '403': { description: Administrator or receptionist role required. }
+  /service-requests/{id}/status:
+    patch:
+      tags: [Digital Concierge]
+      summary: Acknowledge or update a service-request status
+      description: Administrator, receptionist, or assigned service staff only. Cancellation is restricted to administrators/receptionists. Each accepted change is recorded in status history.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceRequestStatus' }
+            example:
+              status: in_progress
+              note: Staff member is attending to the request
+      responses:
+        '200': { description: Status updated and history recorded. }
+        '400': { description: Invalid status or request body. }
+        '403': { description: User is not authorised to perform this status change. }
+        '404': { description: Request not found. }
+        '409': { description: Invalid status transition or request is already terminal. }
+        '401': { description: Missing or invalid JWT. }
+  /bookings/{id}/check-in:
+    patch:
+      tags: [Bookings and Front Desk]
+      summary: Check in a guest
+      description: Administrator/receptionist operation. Only a confirmed booking can be checked in.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      responses:
+        '200': { description: Booking marked checked_in. }
+        '404': { description: Booking not found. }
+        '409': { description: Booking is not confirmed. }
+        '401': { description: Missing or invalid JWT. }
+        '403': { description: Administrator or receptionist role required. }
+  /bookings/{id}/check-out:
+    patch:
+      tags: [Bookings and Front Desk]
+      summary: Check out a guest
+      description: Administrator/receptionist operation. Only a checked_in booking can be checked out. The booking becomes completed and its allocated room moves to cleaning.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      responses:
+        '200': { description: Booking completed and allocated room moved to cleaning. }
+        '404': { description: Booking not found. }
+        '409': { description: Booking is not checked_in. }
+        '401': { description: Missing or invalid JWT. }
+        '403': { description: Administrator or receptionist role required. }
+  /rooms/{id}/status:
+    patch:
+      tags: [Rooms and Housekeeping]
+      summary: Update a room's operational status
+      description: Administrator, receptionist, or service_staff only. Housekeeping should set a room to ready after cleaning/preparation; rooms not marked ready remain excluded from room allocation.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoomStatusUpdate' }
+            example: { status: ready }
+      responses:
+        '200': { description: Room status updated. }
+        '400': { description: Invalid room status. }
+        '404': { description: Room not found. }
+        '401': { description: Missing or invalid JWT. }
+        '403': { description: Administrator, receptionist, or service_staff role required. }
+        
