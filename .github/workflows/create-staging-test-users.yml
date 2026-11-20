@@ -1,0 +1,100 @@
+
+name: Create Staging Test Accounts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create-test-users:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Create staging accounts
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          GUEST_PASSWORD: ${{ secrets.STAGING_GUEST_PASSWORD }}
+          STAFF_PASSWORD: ${{ secrets.STAGING_STAFF_PASSWORD }}
+        run: |
+          node <<'NODE'
+          const knex = require('knex');
+          const bcrypt = require('bcryptjs');
+          const config = require('./knexfile');
+
+          async function main() {
+            if (!process.env.DATABASE_URL ||
+                !process.env.GUEST_PASSWORD ||
+                !process.env.STAFF_PASSWORD) {
+              throw new Error('A required staging secret is missing.');
+            }
+
+            const db = knex(config.production);
+
+            try {
+              await db.transaction(async (trx) => {
+                const accounts = [
+                  {
+                    first_name: 'Cybersecurity',
+                    last_name: 'Guest',
+                    email: 'cybersecurity-guest@example.com',
+                    role: 'guest',
+                    password: process.env.GUEST_PASSWORD
+                  },
+                  {
+                    first_name: 'Cybersecurity',
+                    last_name: 'Staff',
+                    email: 'cybersecurity-staff@example.com',
+                    role: 'service_staff',
+                    password: process.env.STAFF_PASSWORD
+                  }
+                ];
+
+                for (const account of accounts) {
+                  const existing = await trx('users')
+                    .where({ email: account.email })
+                    .first('id');
+
+                  if (existing) {
+                    throw new Error(
+                      `Account already exists: ${account.email}. No accounts were changed.`
+                    );
+                  }
+
+                  await trx('users').insert({
+                    first_name: account.first_name,
+                    last_name: account.last_name,
+                    email: account.email,
+                    password_hash: await bcrypt.hash(account.password, 10),
+                    role: account.role,
+                    is_active: true,
+                    email_verified_at: trx.fn.now()
+                  });
+                }
+              });
+
+              console.log('Both staging test accounts were created successfully.');
+            } finally {
+              await db.destroy();
+            }
+          }
+
+          main().catch((error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+          });
+          NODE
+          
