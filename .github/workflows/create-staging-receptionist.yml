@@ -1,0 +1,77 @@
+name: Create Staging Receptionist Account
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create-receptionist:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Create staging receptionist
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          RECEPTIONIST_PASSWORD: ${{ secrets.STAGING_RECEPTIONIST_PASSWORD }}
+        run: |
+          node <<'NODE'
+          const knex = require('knex');
+          const bcrypt = require('bcryptjs');
+          const config = require('./knexfile');
+
+          async function main() {
+            if (!process.env.DATABASE_URL || !process.env.RECEPTIONIST_PASSWORD) {
+              throw new Error('A required staging secret is missing.');
+            }
+
+            const db = knex(config.production);
+
+            try {
+              const email = 'cybersecurity-receptionist@example.com';
+
+              const existing = await db('users')
+                .where({ email })
+                .first('id');
+
+              if (existing) {
+                throw new Error('Receptionist account already exists. No changes made.');
+              }
+
+              await db('users').insert({
+                first_name: 'Cybersecurity',
+                last_name: 'Receptionist',
+                email,
+                password_hash: await bcrypt.hash(
+                  process.env.RECEPTIONIST_PASSWORD,
+                  10
+                ),
+                role: 'receptionist',
+                is_active: true,
+                email_verified_at: db.fn.now()
+              });
+
+              console.log('Staging receptionist account created successfully.');
+            } finally {
+              await db.destroy();
+            }
+          }
+
+          main().catch((error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+          });
+          NODE
