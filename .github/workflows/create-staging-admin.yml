@@ -1,0 +1,76 @@
+
+name: Create Staging Administrator Account
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create-admin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Create staging administrator
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          ADMIN_PASSWORD: ${{ secrets.STAGING_MANAGER_PASSWORD }}
+        run: |
+          node <<'NODE'
+          const knex = require('knex');
+          const bcrypt = require('bcryptjs');
+          const config = require('./knexfile');
+
+          async function main() {
+            if (!process.env.DATABASE_URL || !process.env.ADMIN_PASSWORD) {
+              throw new Error('A required staging secret is missing.');
+            }
+
+            const db = knex(config.production);
+
+            try {
+              const email = 'cybersecurity-admin@example.com';
+
+              const existing = await db('users')
+                .where({ email })
+                .first('id');
+
+              if (existing) {
+                throw new Error('Administrator account already exists. No changes made.');
+              }
+
+              await db('users').insert({
+                first_name: 'Cybersecurity',
+                last_name: 'Admin',
+                email,
+                password_hash: await bcrypt.hash(process.env.ADMIN_PASSWORD, 10),
+                role: 'administrator',
+                is_active: true,
+                email_verified_at: db.fn.now()
+              });
+
+              console.log('Staging administrator account created successfully.');
+            } finally {
+              await db.destroy();
+            }
+          }
+
+          main().catch((error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+          });
+          NODE
+          
