@@ -69,7 +69,13 @@ async function getRoomAvailability(req, res, next) {
 async function updateRoomStatus(req, res, next) {
   try {
     const { status } = req.body;
-    const allowed = ['ready', 'cleaning', 'maintenance', 'out_of_service'];
+    const allowed = [
+  'active',
+  'ready',
+  'cleaning',
+  'maintenance',
+  'out_of_service'
+];
     if (!allowed.includes(status)) {
       return res.status(400).json({
         success: false,
