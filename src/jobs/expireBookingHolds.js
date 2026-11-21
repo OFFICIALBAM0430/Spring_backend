@@ -25,10 +25,10 @@ async function expireBookingHolds() {
 }
 
 function startBookingExpiryJob() {
-  // Run once when the server starts.
+  
   expireBookingHolds();
 
-  // Check for expired bookings every minute.
+
   setInterval(expireBookingHolds, 60 * 1000);
 
   console.log('Booking expiry job started');
