@@ -4,7 +4,6 @@ const { db } = require('../config/database');
 const paystack = require('../config/paystack');
 const generateReference = require('../utils/generateReference');
 
-// INITIALIZE PAYMENT
 exports.initializePayment = async (req, res, next) => {
   try {
     const { bookingId } = req.body;
@@ -66,7 +65,7 @@ exports.initializePayment = async (req, res, next) => {
 
     const reference = generateReference('PAY');
 
-    // Paystack expects the amount in kobo.
+    
     const amount = Math.round(Number(booking.total_amount) * 100);
 
     const response = await paystack.post('/transaction/initialize', {
@@ -108,7 +107,6 @@ exports.initializePayment = async (req, res, next) => {
   }
 };
 
-// VERIFY PAYMENT
 exports.verifyPayment = async (req, res, next) => {
   try {
     const { reference } = req.body;
@@ -145,7 +143,7 @@ exports.verifyPayment = async (req, res, next) => {
       });
     }
 
-    // Avoid processing a previously verified payment again.
+
     if (payment.status === 'successful') {
       return res.status(200).json({
         success: true,
@@ -223,7 +221,6 @@ exports.verifyPayment = async (req, res, next) => {
         };
       }
 
-      // Recheck inventory before confirming the booking.
       await trx('room_types')
         .where({ id: lockedBooking.room_type_id })
         .forUpdate()
