@@ -16,6 +16,7 @@ const bookingRoutes = require('./src/routes/booking.routes');
 const paymentRoutes = require('./src/routes/payment.routes');
 const roomRoutes = require('./src/routes/room.routes');
 const serviceRequestsRoutes = require('./src/routes/serviceRequests.routes');
+const abandonmentPredictionRoutes = require('./src/routes/abandonmentPrediction.routes');
 
 const { startBookingExpiryJob } = require('./src/jobs/expireBookingHolds');
 const {
@@ -49,6 +50,7 @@ app.use('/api/v1/rooms', roomRoutes);
 app.use('/api/v1/bookings', bookingRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/service-requests', serviceRequestsRoutes);
+app.use('/api/v1/predictions/abandonment', abandonmentPredictionRoutes);
 
 app.use(errorHandler);
 
