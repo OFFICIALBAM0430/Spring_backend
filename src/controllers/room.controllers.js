@@ -45,7 +45,7 @@ async function getRoomAvailability(req, res, next) {
     const prepSetting = await db('platform_settings').where({ key: 'room_preparation_minutes' }).first('value');
     const preparationMinutes = prepSetting ? Number(prepSetting.value) : 120;
     const rooms = await db('rooms as r').join('room_types as rt', 'r.room_type_id', 'rt.id')
-      .where('r.status', 'ready')
+      .where('r.status', ['active', 'ready'])
       .modify((q) => { if (room_type) q.whereILike('rt.name', room_type); })
       .whereNotExists(function () {
         this.select('*').from('bookings as b').whereRaw('b.room_id = r.id')
