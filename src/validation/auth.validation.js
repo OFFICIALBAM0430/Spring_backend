@@ -26,10 +26,15 @@ const resetPasswordSchema = Joi.object({
   password: Joi.string().min(8).required(),
 });
 
+const resendVerificationSchema = Joi.object({
+  email: Joi.string().trim().email().required(),
+});
+
 module.exports = {
   registerSchema,
   loginSchema,
   verifyEmailSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resendVerificationSchema
 };
