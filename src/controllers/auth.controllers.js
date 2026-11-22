@@ -184,6 +184,73 @@ async function verifyEmail(req, res) {
   }
 }
 
+
+
+async function resendVerification(req, res) {
+  try {
+    const normalizedEmail = req.body.email.trim().toLowerCase();
+
+    const user = await db('users')
+      .where({ email: normalizedEmail })
+      .first();
+
+    // Always return the same response for privacy.
+    const response = {
+      success: true,
+      message:
+        'If the account exists and is unverified, a new verification email will be sent.',
+    };
+
+    if (!user || user.email_verified_at || !user.is_active) {
+      return res.status(200).json(response);
+    }
+
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+
+    const verificationExpiresAt = new Date(
+      Date.now() + 24 * 60 * 60 * 1000
+    );
+
+    await db('users')
+      .where({ id: user.id })
+      .update({
+        verification_token: verificationToken,
+        verification_expires_at: verificationExpiresAt,
+      });
+
+    const frontendUrl = process.env.FRONTEND_URL;
+
+    if (!frontendUrl) {
+      throw new Error('FRONTEND_URL is not configured');
+    }
+
+    const verificationLink =
+      `${frontendUrl.replace(/\/+$/, '')}/verify-email?token=${verificationToken}`;
+
+    await sendEmail({
+      to: normalizedEmail,
+      subject: 'Verify your DGEP account',
+      text: `Verify your email using this link: ${verificationLink}`,
+      html: `
+        <h2>Verify your DGEP account</h2>
+        <p>Please verify your email address.</p>
+        <a href="${verificationLink}">Verify Email</a>
+        <p>This link expires in 24 hours.</p>
+      `,
+    });
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error('Resend verification error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to process verification request. Please try again.',
+    });
+  }
+}
+
+
 async function forgotPassword(req, res) {
   try {
     const normalizedEmail = req.body.email.trim().toLowerCase();
@@ -288,6 +355,7 @@ module.exports = {
   register,
   login,
   verifyEmail,
+  resendVerification,
   forgotPassword,
   resetPassword,
 };
