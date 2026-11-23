@@ -108,6 +108,16 @@ async function getRoomAvailability(req, res, next) {
       ? Number(prepSetting.value)
       : 120;
 
+    if (
+      !Number.isFinite(preparationMinutes) ||
+      preparationMinutes < 0
+    ) {
+      return res.status(500).json({
+        success: false,
+        message: 'Invalid room preparation setting'
+      });
+    }
+
     const rooms = await db('rooms as r')
       .join('room_types as rt', 'r.room_type_id', 'rt.id')
       .whereIn('r.status', ['active', 'ready'])
@@ -123,7 +133,6 @@ async function getRoomAvailability(req, res, next) {
           .whereIn('b.status', [
             'pending',
             'confirmed',
-            'checked_in',
             'completed'
           ])
           .whereRaw(
@@ -141,7 +150,6 @@ async function getRoomAvailability(req, res, next) {
           .where(function () {
             this.whereIn('b.status', [
               'confirmed',
-              'checked_in',
               'completed'
             ]).orWhere(function () {
               this.where('b.status', 'pending')
@@ -223,4 +231,4 @@ module.exports = {
   getRoomAvailability,
   updateRoomStatus
 };
-      
+          
