@@ -1,3 +1,4 @@
+
 const crypto = require('crypto');
 const env = require('../config/env');
 const { db } = require('../config/database');
@@ -31,11 +32,19 @@ exports.initializePayment = async (req, res, next) => {
 
     if (
       booking.status !== 'pending' ||
+      !booking.hold_expires_at ||
       new Date(booking.hold_expires_at) <= new Date()
     ) {
       return res.status(400).json({
         success: false,
         message: 'Booking hold has expired or is no longer payable'
+      });
+    }
+
+    if (!booking.room_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'No physical room has been allocated to this booking'
       });
     }
 
@@ -64,8 +73,6 @@ exports.initializePayment = async (req, res, next) => {
     }
 
     const reference = generateReference('PAY');
-
-    
     const amount = Math.round(Number(booking.total_amount) * 100);
 
     const response = await paystack.post('/transaction/initialize', {
@@ -80,7 +87,7 @@ exports.initializePayment = async (req, res, next) => {
       throw new Error('Paystack could not initialize payment');
     }
 
-    const payment = await db('payments')
+    const [payment] = await db('payments')
       .insert({
         booking_id: booking.id,
         reference,
@@ -101,7 +108,6 @@ exports.initializePayment = async (req, res, next) => {
         payment
       }
     });
-
   } catch (error) {
     next(error);
   }
@@ -143,14 +149,14 @@ exports.verifyPayment = async (req, res, next) => {
       });
     }
 
-
     if (payment.status === 'successful') {
       return res.status(200).json({
         success: true,
         message: 'Payment was already verified',
         data: {
           paymentStatus: 'successful',
-          bookingStatus: booking.status
+          bookingStatus: booking.status,
+          roomId: booking.room_id
         }
       });
     }
@@ -171,7 +177,10 @@ exports.verifyPayment = async (req, res, next) => {
     ) {
       await db('payments')
         .where({ id: payment.id })
-        .update({ status: 'failed', updated_at: db.fn.now() });
+        .update({
+          status: 'failed',
+          updated_at: db.fn.now()
+        });
 
       return res.status(400).json({
         success: false,
@@ -193,7 +202,8 @@ exports.verifyPayment = async (req, res, next) => {
       if (lockedPayment.status === 'successful') {
         return {
           paymentStatus: 'successful',
-          bookingStatus: lockedBooking.status
+          bookingStatus: lockedBooking.status,
+          roomId: lockedBooking.room_id
         };
       }
 
@@ -213,44 +223,11 @@ exports.verifyPayment = async (req, res, next) => {
         lockedBooking.hold_expires_at &&
         new Date(lockedBooking.hold_expires_at) > new Date();
 
-      if (!holdValid) {
+      if (!holdValid || !lockedBooking.room_id) {
         return {
           paymentStatus: 'successful',
           bookingStatus: lockedBooking.status,
-          requiresResolution: true
-        };
-      }
-
-      await trx('room_types')
-        .where({ id: lockedBooking.room_type_id })
-        .forUpdate()
-        .first();
-
-      const roomCount = await trx('rooms')
-        .where({
-          room_type_id: lockedBooking.room_type_id,
-          status: 'active'
-        })
-        .count('* as total')
-        .first();
-
-      const occupiedCount = await trx('bookings')
-        .where({ room_type_id: lockedBooking.room_type_id })
-        .whereNot('id', lockedBooking.id)
-        .whereIn('status', ['pending', 'confirmed'])
-        .where('check_in_date', '<', lockedBooking.check_out_date)
-        .where('check_out_date', '>', lockedBooking.check_in_date)
-        .where(function () {
-          this.whereNull('hold_expires_at')
-            .orWhere('hold_expires_at', '>', trx.fn.now());
-        })
-        .count('* as total')
-        .first();
-
-      if (Number(roomCount.total) <= Number(occupiedCount.total)) {
-        return {
-          paymentStatus: 'successful',
-          bookingStatus: 'pending',
+          roomId: lockedBooking.room_id,
           requiresResolution: true
         };
       }
@@ -265,7 +242,8 @@ exports.verifyPayment = async (req, res, next) => {
 
       return {
         paymentStatus: 'successful',
-        bookingStatus: 'confirmed'
+        bookingStatus: 'confirmed',
+        roomId: lockedBooking.room_id
       };
     });
 
@@ -276,12 +254,10 @@ exports.verifyPayment = async (req, res, next) => {
         : 'Payment verified successfully',
       data: result
     });
-
   } catch (error) {
     next(error);
   }
 };
-
 
 exports.handlePaystackWebhook = async (req, res, next) => {
   try {
@@ -307,7 +283,6 @@ exports.handlePaystackWebhook = async (req, res, next) => {
 
     const event = JSON.parse(req.body.toString());
 
-    
     if (event.event !== 'charge.success') {
       return res.status(200).send('Event received');
     }
@@ -331,7 +306,7 @@ exports.handlePaystackWebhook = async (req, res, next) => {
       return res.status(400).send('Payment details do not match');
     }
 
-    await db.transaction(async (trx) => {
+    const result = await db.transaction(async (trx) => {
       const lockedPayment = await trx('payments')
         .where({ id: payment.id })
         .forUpdate()
@@ -342,7 +317,13 @@ exports.handlePaystackWebhook = async (req, res, next) => {
         .forUpdate()
         .first();
 
-      if (lockedPayment.status === 'successful') return;
+      if (lockedPayment.status === 'successful') {
+        return {
+          paymentStatus: 'successful',
+          bookingStatus: booking.status,
+          roomId: booking.room_id
+        };
+      }
 
       await trx('payments')
         .where({ id: payment.id })
@@ -360,36 +341,13 @@ exports.handlePaystackWebhook = async (req, res, next) => {
         booking.hold_expires_at &&
         new Date(booking.hold_expires_at) > new Date();
 
-      if (!holdValid) return;
-
-      await trx('room_types')
-        .where({ id: booking.room_type_id })
-        .forUpdate()
-        .first();
-
-      const roomCount = await trx('rooms')
-        .where({
-          room_type_id: booking.room_type_id,
-          status: 'active'
-        })
-        .count('* as total')
-        .first();
-
-      const occupiedCount = await trx('bookings')
-        .where({ room_type_id: booking.room_type_id })
-        .whereNot('id', booking.id)
-        .whereIn('status', ['pending', 'confirmed'])
-        .where('check_in_date', '<', booking.check_out_date)
-        .where('check_out_date', '>', booking.check_in_date)
-        .where(function () {
-          this.whereNull('hold_expires_at')
-            .orWhere('hold_expires_at', '>', trx.fn.now());
-        })
-        .count('* as total')
-        .first();
-
-      if (Number(roomCount.total) <= Number(occupiedCount.total)) {
-        return;
+      if (!holdValid || !booking.room_id) {
+        return {
+          paymentStatus: 'successful',
+          bookingStatus: booking.status,
+          roomId: booking.room_id,
+          requiresResolution: true
+        };
       }
 
       await trx('bookings')
@@ -399,11 +357,23 @@ exports.handlePaystackWebhook = async (req, res, next) => {
           hold_expires_at: null,
           updated_at: trx.fn.now()
         });
+
+      return {
+        paymentStatus: 'successful',
+        bookingStatus: 'confirmed',
+        roomId: booking.room_id
+      };
     });
 
-    return res.status(200).send('Webhook processed');
+    if (result.requiresResolution) {
+      console.warn(
+        `Successful payment requires booking resolution: ${payment.booking_id}`
+      );
+    }
 
+    return res.status(200).send('Webhook processed');
   } catch (error) {
     next(error);
   }
 };
+      
