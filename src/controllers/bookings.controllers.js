@@ -52,7 +52,6 @@ exports.createBooking = async (req, res, next) => {
     }
 
     const booking = await db.transaction(async (trx) => {
-      
       const roomType = await trx('room_types')
         .where({
           id: roomTypeId,
@@ -90,7 +89,6 @@ exports.createBooking = async (req, res, next) => {
         throw error;
       }
 
-  
       const availableRoom = await trx('rooms as r')
         .where('r.room_type_id', roomTypeId)
         .whereIn('r.status', ['active', 'ready'])
@@ -101,7 +99,6 @@ exports.createBooking = async (req, res, next) => {
             .whereIn('b.status', [
               'pending',
               'confirmed',
-              'checked_in',
               'completed'
             ])
             .whereRaw(
@@ -119,7 +116,6 @@ exports.createBooking = async (req, res, next) => {
             .where(function () {
               this.whereIn('b.status', [
                 'confirmed',
-                'checked_in',
                 'completed'
               ]).orWhere(function () {
                 this.where('b.status', 'pending')
@@ -152,7 +148,6 @@ exports.createBooking = async (req, res, next) => {
         Number(roomType.price_per_night) * nights
       ).toFixed(2);
 
-    
       const [createdBooking] = await trx('bookings')
         .insert({
           booking_reference: generateReference('BOOK'),
@@ -224,4 +219,4 @@ exports.getBookingById = async (req, res, next) => {
     next(error);
   }
 };
-      
+        
