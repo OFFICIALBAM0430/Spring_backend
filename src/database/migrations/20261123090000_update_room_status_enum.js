@@ -2,6 +2,16 @@
 exports.up = async function (knex) {
   await knex.raw(`
     ALTER TABLE rooms
+    DROP CONSTRAINT IF EXISTS rooms_status_check
+  `);
+
+  await knex.raw(`
+    ALTER TABLE rooms
+    ALTER COLUMN status DROP DEFAULT
+  `);
+
+  await knex.raw(`
+    ALTER TABLE rooms
     ALTER COLUMN status TYPE VARCHAR(30)
     USING status::text
   `);
@@ -27,8 +37,4 @@ exports.up = async function (knex) {
 };
 
 exports.down = async function (knex) {
-  await knex.raw(`
-    ALTER TABLE rooms
-    DROP CONSTRAINT IF EXISTS rooms_status_check
-  `);
 };
